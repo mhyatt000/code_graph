@@ -14,22 +14,29 @@ from pathlib import Path
 class Node:
     """A node in the call graph."""
 
-    __slots__ = ("id", "kind", "label")
+    __slots__ = ("id", "kind", "label", "party", "loc")
 
-    def __init__(self, id: str, kind: str, label: str):
+    def __init__(self, id: str, kind: str, label: str, party: str = "1st", loc: int = 0):
         self.id = id
         self.kind = kind  # dir | file | class | function
         self.label = label
+        self.party = party  # "1st" | "3rd"
+        self.loc = loc  # lines of code
 
     def dot_id(self) -> str:
         return '"' + self.id.replace('"', '\\"') + '"'
 
     def dot_attrs(self) -> str:
         shape = {"dir": "folder", "file": "note", "class": "box", "function": "ellipse"}
-        color = {"dir": "#cccccc", "file": "#aaddff", "class": "#ffddaa", "function": "#ddffdd"}
+        color_1st = {"dir": "#cccccc", "file": "#aaddff", "class": "#ffddaa", "function": "#ddffdd"}
+        color_3rd = {"dir": "#e0e0e0", "file": "#d0d0d0", "class": "#d0d0d0", "function": "#d0d0d0"}
         s = shape.get(self.kind, "ellipse")
-        c = color.get(self.kind, "#ffffff")
-        return f'[label="{self.label}" shape={s} style=filled fillcolor="{c}"]'
+        colors = color_1st if self.party == "1st" else color_3rd
+        c = colors.get(self.kind, "#ffffff")
+        # Scale node width by LOC (min 0.5, max 3.0)
+        w = max(0.5, min(3.0, 0.5 + self.loc / 50))
+        h = max(0.3, min(2.0, 0.3 + self.loc / 80))
+        return f'[label="{self.label}" shape={s} style=filled fillcolor="{c}" party="{self.party}" loc={self.loc} width={w:.2f} height={h:.2f}]'
 
 
 class Edge:
@@ -59,9 +66,9 @@ class Graph:
         self.nodes: dict[str, Node] = {}
         self.edges: list[Edge] = []
 
-    def add_node(self, id: str, kind: str, label: str):
+    def add_node(self, id: str, kind: str, label: str, party: str = "1st", loc: int = 0):
         if id not in self.nodes:
-            self.nodes[id] = Node(id, kind, label)
+            self.nodes[id] = Node(id, kind, label, party=party, loc=loc)
 
     def add_edge(self, src: str, dst: str, kind: str):
         self.edges.append(Edge(src, dst, kind))
@@ -105,8 +112,8 @@ class CallGraphVisitor(ast.NodeVisitor):
         except SyntaxError:
             return
 
-        # Add file node + "has" edge from dir
-        self.graph.add_node(self.file_id, "file", Path(self.rel_path).name)
+        file_loc = source.count("\n") + (1 if source and not source.endswith("\n") else 0)
+        self.graph.add_node(self.file_id, "file", Path(self.rel_path).name, loc=file_loc)
         self._scope.append(self.file_id)
 
         # Process imports and top-level definitions
@@ -116,19 +123,20 @@ class CallGraphVisitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import):
         for alias in node.names:
             mod_id = f"file:{alias.name}"
-            self.graph.add_node(mod_id, "file", alias.name)
+            self.graph.add_node(mod_id, "file", alias.name, party="3rd")
             self.graph.add_edge(self._current_scope_id(), mod_id, "imports")
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
         if node.module is None:
             return
         mod_id = f"file:{node.module}"
-        self.graph.add_node(mod_id, "file", node.module)
+        self.graph.add_node(mod_id, "file", node.module, party="3rd")
         self.graph.add_edge(self._current_scope_id(), mod_id, "imports")
 
     def visit_ClassDef(self, node: ast.ClassDef):
         cls_id = self._make_id("class", node.name)
-        self.graph.add_node(cls_id, "class", node.name)
+        loc = (node.end_lineno or node.lineno) - node.lineno + 1
+        self.graph.add_node(cls_id, "class", node.name, loc=loc)
         self.graph.add_edge(self._current_scope_id(), cls_id, "has")
 
         # Inheritance: "is" edges
@@ -136,7 +144,7 @@ class CallGraphVisitor(ast.NodeVisitor):
             base_name = _resolve_name(base)
             if base_name:
                 base_id = f"class:{base_name}"
-                self.graph.add_node(base_id, "class", base_name)
+                self.graph.add_node(base_id, "class", base_name, party="3rd")
                 self.graph.add_edge(cls_id, base_id, "is")
 
         self._scope.append(cls_id)
@@ -151,7 +159,8 @@ class CallGraphVisitor(ast.NodeVisitor):
 
     def _visit_function(self, node):
         func_id = self._make_id("function", node.name)
-        self.graph.add_node(func_id, "function", node.name)
+        loc = (node.end_lineno or node.lineno) - node.lineno + 1
+        self.graph.add_node(func_id, "function", node.name, loc=loc)
         self.graph.add_edge(self._current_scope_id(), func_id, "has")
 
         # TODO: future "decorates" edge
@@ -210,7 +219,7 @@ class CallGraphVisitor(ast.NodeVisitor):
 
         # Create a placeholder using the short name so the graph stays readable
         placeholder_id = f"function:{name}"
-        self.graph.add_node(placeholder_id, "function", short_name)
+        self.graph.add_node(placeholder_id, "function", short_name, party="3rd")
         return placeholder_id
 
 

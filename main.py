@@ -1,4 +1,5 @@
 import networkx as nx
+from rich import print
 from pyvis.network import Network
 import pydot
 
@@ -16,10 +17,17 @@ def main():
         if name in ('node', 'edge', 'graph', ''):
             continue
         attrs = node.obj_dict.get("attributes", {})
+        if attrs['party'] == '"3rd"' or attrs['fillcolor'] == '"#d0d0d0"':
+            continue
+        print(attrs['party'])
         G.add_node(name, **attrs)
     for edge in pydot_graph.get_edges():
+        src, dst = edge.get_source(), edge.get_destination()
+        # Only add edge if both endpoints are 1st-party nodes already in the graph
+        if src not in G.nodes or dst not in G.nodes:
+            continue
         attrs = edge.obj_dict.get("attributes", {})
-        G.add_edge(edge.get_source(), edge.get_destination(), **attrs)
+        G.add_edge(src, dst, **attrs)
 
     # Visualize
     visualize(G)
