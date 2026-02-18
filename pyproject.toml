@@ -10,4 +10,5 @@ dependencies = [
     "pydot>=4.0.1",
     "pyvis>=0.3.2",
     "rich>=14.3.2",
+    "tqdm>=4.67.3",
 ]
