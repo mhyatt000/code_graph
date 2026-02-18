@@ -1,4 +1,5 @@
 import networkx as nx
+from tqdm import tqdm
 from rich import print
 from pyvis.network import Network
 import pydot
@@ -12,14 +13,13 @@ def main():
 
     # Convert to NetworkX graph, preserving DOT attributes
     G = nx.DiGraph()
-    for node in pydot_graph.get_nodes():
+    for node in tqdm(pydot_graph.get_nodes()):
         name = node.get_name()
         if name in ('node', 'edge', 'graph', ''):
             continue
         attrs = node.obj_dict.get("attributes", {})
         if attrs['party'] == '"3rd"' or attrs['fillcolor'] == '"#d0d0d0"':
             continue
-        print(attrs['party'])
         G.add_node(name, **attrs)
     for edge in pydot_graph.get_edges():
         src, dst = edge.get_source(), edge.get_destination()
@@ -43,12 +43,13 @@ def visualize(G: nx.DiGraph, out="graph.html"):
     )
 
     # Better physics defaults for large graphs
+            # net.force_atlas_2based(
     net.barnes_hut(
-        gravity=-80000,
-        central_gravity=0.3,
-        spring_length=250,
-        spring_strength=0.001,
-        damping=0.09,
+        gravity=-80000, # Stronger repulsion to spread out nodes
+        central_gravity=0.5, # Moderate pull towards center to prevent drifting
+        spring_length=100, # Longer springs to reduce edge crossings
+        spring_strength=0.500, # Weaker springs to allow more movement
+        damping=1.25, # More damping to stabilize faster
     )
 
     for node, data in G.nodes(data=True):

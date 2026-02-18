@@ -6,7 +6,9 @@ Edges: imports, calls, has (attribute/containment), is (subclass/inheritance)
 Future edges: decorates
 """
 
+from tqdm import tqdm
 import ast
+import argparse
 import sys
 from pathlib import Path
 
@@ -34,8 +36,10 @@ class Node:
         colors = color_1st if self.party == "1st" else color_3rd
         c = colors.get(self.kind, "#ffffff")
         # Scale node width by LOC (min 0.5, max 3.0)
-        w = max(0.5, min(3.0, 0.5 + self.loc / 50))
-        h = max(0.3, min(2.0, 0.3 + self.loc / 80))
+        # w = max(0.5, min(3.0, 0.5 + self.loc / 50))
+        # h = max(0.3, min(2.0, 0.3 + self.loc / 80))
+        x = (self.loc / 8)**2
+        w, h = x,x
         return f'[label="{self.label}" shape={s} style=filled fillcolor="{c}" party="{self.party}" loc={self.loc} width={w:.2f} height={h:.2f}]'
 
 
@@ -48,6 +52,14 @@ class Edge:
         self.src = src
         self.dst = dst
         self.kind = kind  # imports | calls | has | is
+
+    def __hash__(self) -> int:
+        return hash((self.src, self.dst, self.kind))
+
+    def __eq__(self, other) -> bool:
+        if not isinstance(other, Edge):
+            return False
+        return self.src == other.src and self.dst == other.dst and self.kind == other.kind
 
     def dot_attrs(self) -> str:
         styles = {
@@ -64,23 +76,34 @@ class Graph:
 
     def __init__(self):
         self.nodes: dict[str, Node] = {}
-        self.edges: list[Edge] = []
+        self.edges: set[Edge] = set()
 
     def add_node(self, id: str, kind: str, label: str, party: str = "1st", loc: int = 0):
         if id not in self.nodes:
             self.nodes[id] = Node(id, kind, label, party=party, loc=loc)
 
     def add_edge(self, src: str, dst: str, kind: str):
-        self.edges.append(Edge(src, dst, kind))
+        self.edges.add(Edge(src, dst, kind))
 
-    def write_dot(self, path: str):
+    def write_dot(self, path: str, include_3rd_party: bool = False):
         lines = ["digraph callgraph {", "  rankdir=LR;", "  node [fontname=Helvetica fontsize=10];", "  edge [fontname=Helvetica fontsize=8];", ""]
-        for n in self.nodes.values():
+
+        # Filter nodes based on party flag
+        nodes_to_write = {
+            nid: n for nid, n in self.nodes.items()
+            if include_3rd_party or n.party == "1st"
+        }
+
+        for n in nodes_to_write.values():
             lines.append(f"  {n.dot_id()} {n.dot_attrs()};")
         lines.append("")
+
+        # Only write edges if both endpoints are in the filtered nodes
         for e in self.edges:
-            src = self.nodes[e.src].dot_id() if e.src in self.nodes else f'"{e.src}"'
-            dst = self.nodes[e.dst].dot_id() if e.dst in self.nodes else f'"{e.dst}"'
+            if e.src not in nodes_to_write or e.dst not in nodes_to_write:
+                continue
+            src = nodes_to_write[e.src].dot_id()
+            dst = nodes_to_write[e.dst].dot_id()
             lines.append(f"  {src} -> {dst} {e.dot_attrs()};")
         lines.append("}")
         with open(path, "w") as f:
@@ -255,7 +278,7 @@ def build_graph(root_dir: str) -> Graph:
 
     # Add directory nodes
     dirs_seen = set()
-    for f in py_files:
+    for f in tqdm(list(py_files)):
         rel = Path(f).relative_to(root)
         parts = rel.parts[:-1]  # directory parts
         for i in range(len(parts)):
@@ -284,11 +307,25 @@ def build_graph(root_dir: str) -> Graph:
 
 
 def main():
-    root_dir = sys.argv[1] if len(sys.argv) > 1 else "lgrey"
-    graph = build_graph(root_dir)
+    parser = argparse.ArgumentParser(
+        description="Static AST-based call graph analyzer"
+    )
+    parser.add_argument(
+        "-i", "--input", type=str, 
+        help="Root directory to analyze (default: lgrey)"
+    )
+    parser.add_argument(
+        "-o", "--output", type=str, default="graph.dot",
+        help="Output DOT file (default: graph.dot)"
+    )
+    parser.add_argument(
+        "-t", "--third-party", action="store_true",
+        help="Include 3rd party nodes and edges (default: exclude)"
+    )
+    args = parser.parse_args()
 
-    out = "graph.dot"
-    graph.write_dot(out)
+    graph = build_graph(args.input or "lgrey")
+    graph.write_dot(args.output, include_3rd_party=args.third_party)
 
     n_by_kind = {}
     for n in graph.nodes.values():
@@ -298,7 +335,7 @@ def main():
     for e in graph.edges:
         e_by_kind[e.kind] = e_by_kind.get(e.kind, 0) + 1
 
-    print(f"Wrote {out}")
+    print(f"Wrote {args.output}")
     print(f"  Nodes: {len(graph.nodes)} {n_by_kind}")
     print(f"  Edges: {len(graph.edges)} {e_by_kind}")
 
